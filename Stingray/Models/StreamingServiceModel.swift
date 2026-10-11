@@ -873,8 +873,10 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
     private let userSessionID: String
     /// API access token.
     private let accessToken: String
-    /// Where playback starts, reported until the player has an item
+    /// Where playback starts, reported until the player gets there
     private let startTime: CMTime
+    /// Whether the player has reached `startTime`, after which its own time is reported
+    private var reachedStart = false
 
     public init(
         player: AVPlayer,
@@ -918,10 +920,12 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
 
     deinit { self.playerProgressTask?.cancel() }
 
-    /// Current playback position in ticks. Holds the start time while the player has no item, as while spatial audio starts
+    /// Current playback position in ticks. Holds the start time until the player gets there: it has no item while spatial audio starts,
+    /// and sits at zero until its first seek lands.
     private var playbackTicks: Int {
-        let position = self.player.currentItem == nil ? self.startTime : self.player.currentTime()
-        return TimeInterval(position.seconds).ticks
+        let current = self.player.currentTime()
+        if !self.reachedStart { self.reachedStart = current.seconds > 0 || self.startTime.seconds <= 0 }
+        return TimeInterval((self.reachedStart ? current : self.startTime).seconds).ticks
     }
 
     public func start() {
