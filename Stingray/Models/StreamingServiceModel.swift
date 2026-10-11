@@ -708,10 +708,8 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
     ) {
         // A player without an item reports an invalid time, as while spatial audio starts
         let startTime = startTime.isNumeric ? startTime : CMTime(seconds: mediaSource.startPoint, preferredTimescale: 600)
-        // End spatial audio left from a previous start, in case the caller didn't end its playback first
-        self.spatialAudioStart?.cancel()
-        self.spatialAudio?.stop()
-        self.spatialAudio = nil
+        // End playback left from a previous start, in case the caller didn't
+        self.playbackEnd()
         let sessionID = UUID().uuidString
         guard let videoStream = mediaSource.videoStreams.first(where: { $0.id == videoID })
         else {
