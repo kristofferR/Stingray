@@ -93,6 +93,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     /// - Parameters:
     ///   - file: Original file, read with range requests
     ///   - videoPlaylist: HLS multivariant playlist for the video, whose own audio is replaced
+    ///   - headers: Authenticate the file and the playlist
     ///   - audioStream: Audio stream to convert
     ///   - mediaSource: Media source the audio stream belongs to
     ///   - startTime: Where playback will start, which is converted first
@@ -103,6 +104,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     public static func start(
         file: URL,
         videoPlaylist: URL,
+        headers: [String: String],
         audioStream: any MediaStreamProtocol,
         mediaSource: any MediaSourceProtocol,
         startTime: CMTime,
@@ -112,7 +114,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     ) async -> SpatialAudioModel? {
         do {
             try AtmosOutputActivator.configureAudioSession()
-            let file = try await MatroskaFile.open(HTTPByteSource(url: file))
+            let file = try await MatroskaFile.open(HTTPByteSource(url: file, headers: headers))
 
             // The server numbers streams its own way, but lists the file's audio tracks in the file's order
             let audioStreams = mediaSource.audioStreams.filter { !$0.isExternal }
@@ -130,6 +132,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
                 file: file,
                 track: track,
                 videoMaster: videoPlaylist,
+                videoHeaders: headers,
                 startTime: startTime,
                 options: options
             )
@@ -142,7 +145,6 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
             return SpatialAudioModel(stream: stream, playlist: playlist, player: player, makeItem: makeItem, fallback: fallback)
         }
         catch {
-            // Interpolating a URL error would print its failing URL, which carries the access token
             let reason = (error as? SpatialAudioError)?.description ?? error.localizedDescription
             if !Task.isCancelled { Log.warning("Spatial audio failed to start, so playing the usual audio: \(reason)") }
             return nil
@@ -220,7 +222,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     /// - Parameter error: Why it failed, if known
     private func fail(_ error: Error?) {
         guard !self.isStopped else { return }
-        // Only the domain and code: the item's error may carry its URL, which carries the access token
+        // Only the domain and code: the item's error may carry a server URL, and the server adds the access token to some
         let reason = (error as NSError?).map { "\($0.domain) \($0.code)" } ?? "Unknown error"
         Log.warning("Spatial audio failed, so playing the usual audio: \(reason)")
         self.fallback(self.pendingSeek?.target ?? self.player.currentTime())

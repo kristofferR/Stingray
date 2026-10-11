@@ -80,7 +80,7 @@ public protocol AdvancedNetworkProtocol {
     ///   - audioID: Audio ID to be used
     ///   - videoID: Video ID to be used
     ///   - sessionID: A one-off token to not be reused when changing settings
-    /// - Returns: The original file to convert the audio from, and an HLS multivariant playlist for the video
+    /// - Returns: Where SpatialAudioBridge reads the media source from
     func getSpatialAudioContent(
         accessToken: String,
         contentID: String,
@@ -89,7 +89,7 @@ public protocol AdvancedNetworkProtocol {
         audioID: String,
         videoID: String,
         sessionID: String
-    ) -> (file: URL, videoPlaylist: URL)?
+    ) -> SpatialAudioContent?
     /// Updates the server about the current playback status
     /// - Parameters:
     ///   - mediaSourceID: Media source ID of the currently played content
@@ -153,6 +153,16 @@ public protocol AdvancedNetworkProtocol {
     ///   - priority: How prudent the syncing is
     /// - Returns: Formatted seasons
     func getSeasonMedia(accessToken: String, showID: String, priority: RequestPriority) async throws -> [TVSeason]
+}
+
+/// Where SpatialAudioBridge reads a media source from, for playing its TrueHD Atmos or DTS:X track
+public struct SpatialAudioContent {
+    /// The original file, which the audio is converted from
+    public let file: URL
+    /// HLS multivariant playlist for the video
+    public let videoPlaylist: URL
+    /// Authenticate the file, the playlist, and everything it references, keeping the access token out of URLs
+    public let headers: [String: String]
 }
 
 /// Direction the server should sort a library request in.
@@ -714,8 +724,7 @@ public final class JellyfinAdvancedNetwork: AdvancedNetworkProtocol {
         guard let item = self.buildAVPlayerItem(
             path: "/Videos/\(contentID)/main.m3u8",
             urlParams: params,
-            // TODO: remove X-MediaBrowser-Token when the backward compatibility is no longer required
-            headers: ["X-MediaBrowser-Token": accessToken, "Authorization": network.buildAuthHeader(accessToken: accessToken)]
+            headers: self.streamingHeaders(accessToken: accessToken)
         ) else {
             Log.error("Failed to build the AVPlayerItem")
             return nil
@@ -732,9 +741,7 @@ public final class JellyfinAdvancedNetwork: AdvancedNetworkProtocol {
         audioID: String,
         videoID: String,
         sessionID: String
-    ) -> (file: URL, videoPlaylist: URL)? {
-        // AVPlayer loads the playlist's variants and segments without headers, so the URLs carry the token
-        let apiKey = URLQueryItem(name: "ApiKey", value: accessToken)
+    ) -> SpatialAudioContent? {
         var playlistParams = self.streamingParams(
             contentID: contentID,
             bitrate: bitrate,
@@ -748,17 +755,24 @@ public final class JellyfinAdvancedNetwork: AdvancedNetworkProtocol {
             URLQueryItem(name: "audioCodec", value: "aac"),
             URLQueryItem(name: "transcodingMaxAudioChannels", value: "2"),
             URLQueryItem(name: "audioBitRate", value: "128000"),
-            URLQueryItem(name: "allowAudioStreamCopy", value: "false"),
-            apiKey
+            URLQueryItem(name: "allowAudioStreamCopy", value: "false")
         ])
 
         guard let file = network.buildURL(
             path: "/Videos/\(contentID)/stream",
-            urlParams: [URLQueryItem(name: "static", value: "true"), URLQueryItem(name: "mediaSourceID", value: contentID), apiKey]
+            urlParams: [URLQueryItem(name: "static", value: "true"), URLQueryItem(name: "mediaSourceID", value: contentID)]
         ),
               let videoPlaylist = network.buildURL(path: "/Videos/\(contentID)/master.m3u8", urlParams: playlistParams)
         else { return nil }
-        return (file, videoPlaylist)
+        return SpatialAudioContent(file: file, videoPlaylist: videoPlaylist, headers: self.streamingHeaders(accessToken: accessToken))
+    }
+
+    /// Headers that authenticate streaming requests, which keep the access token out of URLs
+    /// - Parameter accessToken: Access token for the server
+    /// - Returns: HTTP headers
+    private func streamingHeaders(accessToken: String) -> [String: String] {
+        // TODO: remove X-MediaBrowser-Token when the backward compatibility is no longer required
+        ["X-MediaBrowser-Token": accessToken, "Authorization": network.buildAuthHeader(accessToken: accessToken)]
     }
 
     /// Stream selection, video, and streaming parameters shared by every HLS request for a media source
