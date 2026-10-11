@@ -67,20 +67,22 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
         self.fallback = fallback
     }
 
-    /// Whether SpatialAudioBridge converts this audio stream: TrueHD Atmos or DTS:X inside the media source's own file
+    /// Whether to try SpatialAudioBridge for this audio stream: TrueHD or DTS-HD MA inside the media source's own file. Starting the stream
+    /// verifies Atmos or DTS:X, and fails for anything else, so plain tracks fall back to the usual audio.
     /// - Parameter audioStream: Audio stream to check
-    /// - Returns: True when the stream should play through SpatialAudioBridge
+    /// - Returns: True when the stream should try SpatialAudioBridge
     public static func converts(_ audioStream: any MediaStreamProtocol) -> Bool {
         !audioStream.isExternal && Self.codec(of: audioStream) != nil
     }
 
-    /// The codec SpatialAudioBridge converts an audio stream with, judging by what the server reports
+    /// The codec SpatialAudioBridge would convert an audio stream with, judging by what the server reports
     /// - Parameter audioStream: Audio stream to check
-    /// - Returns: The codec, or `nil` for streams it doesn't convert
+    /// - Returns: The codec, or `nil` for streams that can't carry Atmos or DTS:X
     private static func codec(of audioStream: any MediaStreamProtocol) -> SpatialAudioCodec? {
-        switch (audioStream.codec, audioStream.spatialFormat) {
-        case ("truehd", .dolbyAtmos): return .trueHDAtmos
-        case ("dts", .dtsX): return .dtsX
+        switch audioStream.codec {
+        case "truehd": return .trueHDAtmos
+        // The server doesn't label every DTS:X track, but only DTS-HD MA carries it, not DTS core, HRA, or Express
+        case "dts" where audioStream.profile.hasPrefix("DTS-HD MA"): return .dtsX
         default: return nil
         }
     }

@@ -108,8 +108,8 @@ public protocol MediaStreamProtocol: Identifiable {
     var codec: String { get }
     /// Is considered the default stream by the server.
     var isDefault: Bool { get }
-    /// Spatial audio format of an audio stream. Ex. Dolby Atmos for a TrueHD Atmos track. Nil for streams without one.
-    var spatialFormat: SpatialAudioFormat? { get }
+    /// Codec profile reported by the server. Ex. "DTS-HD MA" or "Dolby TrueHD + Dolby Atmos". Empty when the server reports none.
+    var profile: String { get }
     /// Whether the stream comes from a separate file instead of the media source's own container. Ex. a sidecar subtitle file.
     var isExternal: Bool { get }
 }
@@ -368,7 +368,7 @@ public final class MediaStream: Decodable, Equatable, MediaStreamProtocol {
     public var bitrate: Int
     public var codec: String
     public var isDefault: Bool
-    public var spatialFormat: SpatialAudioFormat?
+    public var profile: String
     public var isExternal: Bool
     
     public enum CodingKeys: String, CodingKey {
@@ -378,7 +378,7 @@ public final class MediaStream: Decodable, Equatable, MediaStreamProtocol {
         case bitrate = "BitRate"
         case codec = "Codec"
         case isDefault = "IsDefault"
-        case spatialFormat = "AudioSpatialFormat"
+        case profile = "Profile"
         case isExternal = "IsExternal"
     }
     
@@ -398,8 +398,7 @@ public final class MediaStream: Decodable, Equatable, MediaStreamProtocol {
             title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Unknown stream"
             codec = try container.decodeIfPresent(String.self, forKey: .codec) ?? ""
             isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
-            let rawSpatialFormat = try container.decodeIfPresent(String.self, forKey: .spatialFormat) ?? ""
-            spatialFormat = SpatialAudioFormat(rawValue: rawSpatialFormat)
+            profile = try container.decodeIfPresent(String.self, forKey: .profile) ?? ""
             isExternal = try container.decodeIfPresent(Bool.self, forKey: .isExternal) ?? false
             bitrate = try container.decodeIfPresent(Int.self, forKey: .bitrate) ?? 10000
             if codec == "av1" {
@@ -421,7 +420,7 @@ public final class MediaStream: Decodable, Equatable, MediaStreamProtocol {
         lhs.bitrate == rhs.bitrate &&
         lhs.codec == rhs.codec &&
         lhs.isDefault == rhs.isDefault &&
-        lhs.spatialFormat == rhs.spatialFormat &&
+        lhs.profile == rhs.profile &&
         lhs.isExternal == rhs.isExternal
     }
 }
@@ -610,14 +609,6 @@ public enum StreamType: String, Decodable, Equatable {
     case subtitle = "Subtitle"
     /// Unknown stream.
     case unknown
-}
-
-/// Spatial audio formats the server recognizes in an audio stream.
-public enum SpatialAudioFormat: String, Decodable, Equatable {
-    /// Dolby Atmos. Ex. TrueHD Atmos or Dolby Digital Plus Atmos.
-    case dolbyAtmos = "DolbyAtmos"
-    /// DTS:X
-    case dtsX = "DTSX"
 }
 
 /// Track the loading status of TV Seasons
