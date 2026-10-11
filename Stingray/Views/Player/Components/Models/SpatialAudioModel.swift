@@ -45,6 +45,8 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     private var monitor: Task<Void, Never>?
     /// The latest seek target and when it was requested, until playback resumes after it
     private var pendingSeek: (target: CMTime, since: ContinuousClock.Instant)?
+    /// Set once stopped, so a failure notification that was already queued can't fall back over a newer session
+    private var isStopped = false
 
     /// Wraps a started stream
     /// - Parameters:
@@ -140,7 +142,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
             return SpatialAudioModel(stream: stream, playlist: playlist, player: player, makeItem: makeItem, fallback: fallback)
         }
         catch {
-            // A URL error's description could include the URL, which carries the access token
+            // Interpolating a URL error would print its failing URL, which carries the access token
             let reason = (error as? SpatialAudioError)?.description ?? error.localizedDescription
             if !Task.isCancelled { Log.warning("Spatial audio failed to start, so playing the usual audio: \(reason)") }
             return nil
@@ -215,6 +217,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     /// Plays the usual audio instead, once the stream has failed, from where the viewer was or was seeking to
     /// - Parameter error: Why it failed, if known
     private func fail(_ error: Error?) {
+        guard !self.isStopped else { return }
         Log.warning("Spatial audio failed, so playing the usual audio: \(error?.localizedDescription ?? "Unknown error")")
         self.fallback(self.pendingSeek?.target ?? self.player.currentTime())
     }
@@ -224,6 +227,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     }
 
     public func stop() {
+        self.isStopped = true
         self.monitor?.cancel()
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
         self.failureObserver = nil
