@@ -716,20 +716,16 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
         let audioStream = mediaSource.audioStreams.first { $0.id == audioID }
         let spatialAudioKey = mediaSource.id + "/" + audioID
         if #available(tvOS 26, *), let audioStream, SpatialAudioModel.converts(audioStream),
-           !self.spatialAudioFailures.contains(spatialAudioKey) {
-            guard let content = networkAPI.getSpatialAudioContent(
-                accessToken: accessToken,
-                contentID: mediaSource.id,
-                bitrate: bitrateBits,
-                subtitleID: subtitleID,
-                audioID: audioID,
-                videoID: videoID,
-                sessionID: sessionID
-            )
-            else {
-                Log.error("Failed to generate spatial audio URLs for \(mediaSource.name) - \(mediaSource.id)")
-                return
-            }
+           !self.spatialAudioFailures.contains(spatialAudioKey),
+           let content = networkAPI.getSpatialAudioContent(
+               accessToken: accessToken,
+               contentID: mediaSource.id,
+               bitrate: bitrateBits,
+               subtitleID: subtitleID,
+               audioID: audioID,
+               videoID: videoID,
+               sessionID: sessionID
+           ) {
             // Restarts with the usual audio and a new session, since the server may have started one for this stream's video
             let fallback = { [weak self] (position: CMTime) in
                 guard let self else { return }

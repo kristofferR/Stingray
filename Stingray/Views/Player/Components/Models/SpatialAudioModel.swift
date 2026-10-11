@@ -27,6 +27,8 @@ public protocol SpatialAudioProtocol: AnyObject {
 public final class SpatialAudioModel: SpatialAudioProtocol {
     /// Loopback stream serving the converted audio with the server's video
     private let stream: APACStream
+    /// The stream's playlist, offering the server's video with the converted audio
+    private let playlist: URL
     /// Keeps the HDMI output in Dolby Atmos while APAC plays
     private let atmos = AtmosOutputActivator()
     /// Player the stream plays through
@@ -37,6 +39,8 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     private let fallback: (CMTime) -> Void
     /// The stream's current item, replaced when recovering a stall
     private var item: AVPlayerItem?
+    /// Watches the current item failing partway through playback, which can leave its status ready
+    private var failureObserver: NSObjectProtocol?
     /// Starts playback, then recovers stalls and catches failures until stopped
     private var monitor: Task<Void, Never>?
     /// The latest seek target and when it was requested, until playback resumes after it
@@ -45,11 +49,19 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     /// Wraps a started stream
     /// - Parameters:
     ///   - stream: Loopback stream serving the converted audio
+    ///   - playlist: The stream's playlist with the server's video
     ///   - player: Player to play through
     ///   - makeItem: Creates a player item for the stream's playlist
     ///   - fallback: Plays the usual audio from the given time
-    private init(stream: APACStream, player: AVPlayer, makeItem: @escaping (URL) -> AVPlayerItem, fallback: @escaping (CMTime) -> Void) {
+    private init(
+        stream: APACStream,
+        playlist: URL,
+        player: AVPlayer,
+        makeItem: @escaping (URL) -> AVPlayerItem,
+        fallback: @escaping (CMTime) -> Void
+    ) {
         self.stream = stream
+        self.playlist = playlist
         self.player = player
         self.makeItem = makeItem
         self.fallback = fallback
@@ -117,8 +129,13 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
                 startTime: startTime,
                 options: options
             )
+            // Always set when started with a video playlist; the start throws if no video variant remains
+            guard let playlist = stream.masterPlaylistURL else {
+                await stream.stop()
+                throw SpatialAudioError.source("The stream has no video")
+            }
             Log.info("Playing \(track.codecID) track \(track.number) through SpatialAudioBridge")
-            return SpatialAudioModel(stream: stream, player: player, makeItem: makeItem, fallback: fallback)
+            return SpatialAudioModel(stream: stream, playlist: playlist, player: player, makeItem: makeItem, fallback: fallback)
         }
         catch {
             // A URL error's description could include the URL, which carries the access token
@@ -128,15 +145,12 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
         }
     }
 
-    /// Plays the stream, keeping any playback speed set while it started
+    /// Plays the stream
     /// - Parameter startTime: Where to start, matching the start time the stream was started with
     public func play(from startTime: CMTime) {
-        let rate = self.player.rate
-        self.player.pause() // Don't play from the beginning while seeking
         // The playlist offers only APAC audio, so the activator plays along with every item
         self.atmos.attach(to: self.player)
-        self.replaceItem()
-        self.monitor = Task { [weak self] in await self?.run(from: startTime, rate: rate) }
+        self.monitor = Task { [weak self] in await self?.run(from: startTime) }
     }
 
     /// Starts playback, then recovers stalls and falls back to the usual audio if the stream fails.
@@ -144,21 +158,15 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     /// AVPlayer can wait indefinitely after rapid seeks, when Jellyfin aborts a video segment or AVPlayer drops a connection, and seeking
     /// again doesn't help. A fresh item does: at the pending seek target if playback never reached it, otherwise where it stopped. Seeks
     /// took up to 15 seconds to resume on titles with long keyframe intervals, so 20 seconds of waiting means it's stuck.
-    /// - Parameters:
-    ///   - startTime: Where to start
-    ///   - rate: Playback speed to start at. `0` plays at the default rate
-    private func run(from startTime: CMTime, rate: Float) async {
-        await self.player.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero)
-        guard !Task.isCancelled else { return }
-        if rate > 0 { self.player.rate = rate }
-        else { self.player.play() }
+    /// - Parameter startTime: Where to start
+    private func run(from startTime: CMTime) async {
+        guard await self.load(at: startTime) else { return }
 
         var status = self.player.timeControlStatus
         var changed = ContinuousClock.now
         while (try? await Task.sleep(for: .milliseconds(250))) != nil {
             if let item = self.item, item.status == .failed {
-                Log.warning("Spatial audio failed, so playing the usual audio: \(item.error?.localizedDescription ?? "Unknown error")")
-                self.fallback(self.player.currentTime())
+                self.fail(item.error)
                 return
             }
             if self.player.timeControlStatus != status {
@@ -173,19 +181,43 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
 
             let position = self.pendingSeek?.target ?? self.player.currentTime()
             Log.warning("Spatial audio stalled, so reloading at \(Int(position.seconds)) seconds")
-            self.replaceItem()
-            await self.player.seek(to: position, toleranceBefore: .zero, toleranceAfter: .zero)
-            guard !Task.isCancelled else { return }
-            self.player.play()
+            guard await self.load(at: position) else { return }
             changed = .now
         }
     }
 
-    /// Puts a fresh item for the stream in the player
-    private func replaceItem() {
-        let item = self.makeItem(self.stream.masterPlaylistURL ?? self.stream.audioPlaylistURL)
+    /// Puts a fresh item for the stream in the player and plays it from `time` at the current playback speed
+    /// - Parameter time: Where to play from
+    /// - Returns: False if the stream stopped meanwhile
+    private func load(at time: CMTime) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        let rate = self.player.rate // Includes a speed set while the stream started
+        self.player.pause() // Don't play the new item from its beginning while seeking
+
+        let item = self.makeItem(self.playlist)
         self.item = item
+        if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
+        self.failureObserver = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.failedToPlayToEndTimeNotification,
+            object: item,
+            queue: .main
+        ) { [weak self] notification in
+            self?.fail(notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)
+        }
         self.player.replaceCurrentItem(with: item)
+
+        await self.player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        guard !Task.isCancelled else { return false }
+        if rate > 0 { self.player.rate = rate }
+        else { self.player.play() }
+        return true
+    }
+
+    /// Plays the usual audio instead, once the stream has failed
+    /// - Parameter error: Why it failed, if known
+    private func fail(_ error: Error?) {
+        Log.warning("Spatial audio failed, so playing the usual audio: \(error?.localizedDescription ?? "Unknown error")")
+        self.fallback(self.player.currentTime())
     }
 
     public func noteSeek(to target: CMTime) {
@@ -194,6 +226,8 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
 
     public func stop() {
         self.monitor?.cancel()
+        if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
+        self.failureObserver = nil
         // Leave the player alone if it has already moved on to another item
         if self.player.currentItem === self.item { self.player.replaceCurrentItem(with: nil) }
         self.atmos.detach()
