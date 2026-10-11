@@ -220,7 +220,9 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     /// - Parameter error: Why it failed, if known
     private func fail(_ error: Error?) {
         guard !self.isStopped else { return }
-        Log.warning("Spatial audio failed, so playing the usual audio: \(error?.localizedDescription ?? "Unknown error")")
+        // Only the domain and code: the item's error may carry its URL, which carries the access token
+        let reason = (error as NSError?).map { "\($0.domain) \($0.code)" } ?? "Unknown error"
+        Log.warning("Spatial audio failed, so playing the usual audio: \(reason)")
         self.fallback(self.pendingSeek?.target ?? self.player.currentTime())
     }
 
