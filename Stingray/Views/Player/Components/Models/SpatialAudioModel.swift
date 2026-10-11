@@ -182,10 +182,12 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
             if let seek = self.pendingSeek, status == .playing, ContinuousClock.now - max(changed, seek.since) > .seconds(5) {
                 self.pendingSeek = nil
             }
-            guard status == .waitingToPlayAtSpecifiedRate, ContinuousClock.now - changed > .seconds(20) else { continue }
+            // A seek starts the wait over
+            let waitingSince = max(changed, self.pendingSeek?.since ?? changed)
+            guard status == .waitingToPlayAtSpecifiedRate, ContinuousClock.now - waitingSince > .seconds(20) else { continue }
 
             let position = self.pendingSeek?.target ?? self.player.currentTime()
-            Log.warning("Spatial audio stalled, so reloading at \(Int(position.seconds)) seconds")
+            Log.warning("Spatial audio stalled, so reloading at \(String(format: "%.0f", position.seconds)) seconds")
             guard await self.load(at: position) else { return }
             changed = .now
         }

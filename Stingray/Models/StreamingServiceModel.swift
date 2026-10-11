@@ -187,7 +187,8 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
     @ObservationIgnored private var spatialAudio: SpatialAudioProtocol?
     /// Starts `spatialAudio`, while it's starting
     @ObservationIgnored private var spatialAudioStart: Task<Void, Never>?
-    /// Audio streams SpatialAudioBridge failed to play, by media source and stream ID. They play the usual audio from then on
+    /// Playback configurations SpatialAudioBridge failed to play, by media source, stream IDs, and bitrate. They play the usual audio from
+    /// then on
     @ObservationIgnored private var spatialAudioFailures: Set<String> = []
 
     /// Create a `JellyfinModel` based on known data.
@@ -705,6 +706,8 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
         startTime: CMTime,
         player: AVPlayer
     ) {
+        // A player without an item reports an invalid time, as while spatial audio starts
+        let startTime = startTime.isNumeric ? startTime : CMTime(seconds: mediaSource.startPoint, preferredTimescale: 600)
         let sessionID = UUID().uuidString
         guard let videoStream = mediaSource.videoStreams.first(where: { $0.id == videoID })
         else {
@@ -714,7 +717,8 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
         let bitrateBits = bitrate ?? videoStream.bitrate
 
         let audioStream = mediaSource.audioStreams.first { $0.id == audioID }
-        let spatialAudioKey = mediaSource.id + "/" + audioID
+        // The whole configuration, since a failure may come from the video side, such as a variant the server only transcodes
+        let spatialAudioKey = [mediaSource.id, videoID, audioID, subtitleID ?? "", String(bitrateBits)].joined(separator: "/")
         if #available(tvOS 26, *), let audioStream, SpatialAudioModel.converts(audioStream),
            !self.spatialAudioFailures.contains(spatialAudioKey),
            let content = networkAPI.getSpatialAudioContent(
@@ -923,9 +927,9 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
     /// Current playback position in ticks. Holds the start time until the player gets there: it has no item while spatial audio starts,
     /// and sits at zero until its first seek lands.
     private var playbackTicks: Int {
-        let current = self.player.currentTime()
-        if !self.reachedStart { self.reachedStart = current.seconds > 0 || self.startTime.seconds <= 0 }
-        return TimeInterval((self.reachedStart ? current : self.startTime).seconds).ticks
+        let current = self.player.currentTime() // Invalid while the player has no item
+        if !self.reachedStart { self.reachedStart = current.isNumeric && (current.seconds > 0 || self.startTime.seconds <= 0) }
+        return TimeInterval((self.reachedStart && current.isNumeric ? current : self.startTime).seconds).ticks
     }
 
     public func start() {
