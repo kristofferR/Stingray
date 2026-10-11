@@ -38,6 +38,8 @@ public final class TVPlayerViewModel: AVPlayerViewModelProtocol, Hashable {
     @ObservationIgnored public private(set) var seasons: [(any TVSeasonProtocol)]
     /// Store and restore the current navigation path
     @ObservationIgnored public var navigationPath: NavigationPath?
+    /// Watches for the current item finishing, to autoplay the next episode
+    @ObservationIgnored private var playbackEndObserver: NSObjectProtocol?
 
     // Hashable Conformance
     public static func == (lhs: TVPlayerViewModel, rhs: TVPlayerViewModel) -> Bool {
@@ -149,39 +151,36 @@ public final class TVPlayerViewModel: AVPlayerViewModelProtocol, Hashable {
             bitrate: bitrate ?? self.playerProgress?.bitrate,
             title: title,
             subtitle: subtitle,
+            startTime: startTime,
             player: self.player
         )
 
         self.player.preventsDisplaySleepDuringVideoPlayback = true // Should be default, but oh well
         self.playerProgress = streamingService.playerProgress // Sync to view model
-        self.player.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero)
-        self.player.play()
 
         // Update user settings
         self.settingsModel.usesSubtitles = self.playerProgress?.subtitleID != nil
 
         // Set up observer for when the current item finishes playing
-        if self.settingsModel.autoplay {
-            self.setupPlaybackEndObserver()
-        }
+        self.setupPlaybackEndObserver()
     }
 
     /// Sets up an observer to detect when playback finishes and auto-advance to next episode
     private func setupPlaybackEndObserver() {
-        // Remove any existing observers first
-        NotificationCenter.default.removeObserver(
-            self,
-            name: .AVPlayerItemDidPlayToEndTime,
-            object: self.player.currentItem
-        )
+        // Remove any existing observer first
+        if let playbackEndObserver { NotificationCenter.default.removeObserver(playbackEndObserver) }
+        self.playbackEndObserver = nil
+        guard self.settingsModel.autoplay else { return }
 
-        // Add observer for the current item
-        NotificationCenter.default.addObserver(
+        // Match whichever item is current when one finishes: spatial audio puts its item in place once its stream has started, and
+        // replaces it to recover from a stall
+        self.playbackEndObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
-            object: self.player.currentItem,
+            object: nil,
             queue: .main
-        ) { [weak self] _ in
-            self?.handlePlaybackEnded()
+        ) { [weak self] notification in
+            guard let self, notification.object as? AVPlayerItem === self.player.currentItem else { return }
+            self.handlePlaybackEnded()
         }
     }
 
@@ -265,8 +264,9 @@ public final class TVPlayerViewModel: AVPlayerViewModelProtocol, Hashable {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        if let playbackEndObserver { NotificationCenter.default.removeObserver(playbackEndObserver) }
         self.player.pause()
-        streamingService.playbackEnd()
+        // Leave a newer player's session alone
+        if streamingService.playerProgress?.player === self.player { streamingService.playbackEnd() }
     }
 }

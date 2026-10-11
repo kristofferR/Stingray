@@ -20,6 +20,8 @@ public class AVPlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     public let onRestoreFromPiP: () -> Void
     /// Function to call when the PiP ends
     public let onStopFromPiP: () -> Void
+    /// Function to call with the target of each skip or scrub from the remote
+    public let onSeek: (CMTime) -> Void
     /// Used for PiP identification
     public let id: String
 
@@ -45,16 +47,19 @@ public class AVPlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     ///   - onStartPiP: Called when PiP first begins
     ///   - onRestoreFromPiP: Called when a PiP stream is becoming full-screen again
     ///   - onStopFromPiP: Called when PiP ends without being restored
+    ///   - onSeek: Called with the target of each skip or scrub from the remote
     public init(
         id: String,
         onStartPiP: @escaping () -> Void,
         onRestoreFromPiP: @escaping () -> Void,
         onStopFromPiP: @escaping () -> Void,
+        onSeek: @escaping (CMTime) -> Void,
     ) {
         self.id = id
         self.onStartPiP = onStartPiP
         self.onRestoreFromPiP = onRestoreFromPiP
         self.onStopFromPiP = onStopFromPiP
+        self.onSeek = onSeek
     }
 
     /// Tears down the player, which on tvOS also dismisses any PiP window it owns.
@@ -121,6 +126,15 @@ public class AVPlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     ) {
         Log.warning("PiP failed to start: \(error)")
         Self.activePiPCoordinator = nil
+    }
+
+    public func playerViewController(
+        _ playerViewController: AVPlayerViewController,
+        timeToSeekAfterUserNavigatedFrom oldTime: CMTime,
+        to targetTime: CMTime
+    ) -> CMTime {
+        self.onSeek(targetTime)
+        return targetTime
     }
 
     public func playerViewControllerShouldAutomaticallyDismissAtPictureInPictureStart(

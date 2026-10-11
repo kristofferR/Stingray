@@ -43,7 +43,7 @@ public protocol PlayerProviding {
     /// Track the current playback progress.
     var playerProgress: PlayerProtocol? { get }
 
-    /// Setup playback, informs the server about playback status
+    /// Setup and start playback, informs the server about playback status
     /// - Parameters:
     ///   - mediaSource: Media source being watched.
     ///   - videoID: Video stream ID.
@@ -52,6 +52,7 @@ public protocol PlayerProviding {
     ///   - bitrate: Target video bitrate of the stream. Nil = unlimited bitrate
     ///   - title: Title of the media to put on the player.
     ///   - subtitle: Subtitle, if available, to put on the player.
+    ///   - startTime: Where playback should start from.
     ///   - player: An AVPlayer instance to update and use.
     func playbackStart(
         mediaSource: any MediaSourceProtocol,
@@ -61,11 +62,16 @@ public protocol PlayerProviding {
         bitrate: Int?,
         title: String,
         subtitle: String?,
+        startTime: CMTime,
         player: AVPlayer
     )
 
     /// Inform the server that playback has ended
     func playbackEnd()
+
+    /// Records the target of a skip or scrub from the remote, so spatial audio can resume there if its stream stalls
+    /// - Parameter target: Where the viewer is seeking to
+    func noteSeek(to target: CMTime)
 }
 
 /// Provides user actions with the server
@@ -177,6 +183,12 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
     public var serverVersion: String?
     public var serviceURL: URL
     public var playerProgress: PlayerProtocol?
+    /// Plays the selected TrueHD Atmos or DTS:X track through SpatialAudioBridge, when it does
+    @ObservationIgnored private var spatialAudio: SpatialAudioProtocol?
+    /// Starts `spatialAudio`, while it's starting
+    @ObservationIgnored private var spatialAudioStart: Task<Void, Never>?
+    /// Audio streams SpatialAudioBridge failed to play, by media source and stream ID. They play the usual audio from then on
+    @ObservationIgnored private var spatialAudioFailures: Set<String> = []
 
     /// Create a `JellyfinModel` based on known data.
     /// - Parameters:
@@ -690,6 +702,7 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
         bitrate: Int?,
         title: String,
         subtitle: String?,
+        startTime: CMTime,
         player: AVPlayer
     ) {
         let sessionID = UUID().uuidString
@@ -700,22 +713,88 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
         }
         let bitrateBits = bitrate ?? videoStream.bitrate
 
-        guard let playerItem = networkAPI.getStreamingContent(
-            accessToken: accessToken,
-            contentID: mediaSource.id,
-            bitrate: bitrateBits,
-            subtitleID: subtitleID,
-            audioID: audioID,
-            videoID: videoID,
-            sessionID: sessionID,
-            title: title,
-            subtitle: subtitle
-        )
-        else {
-            Log.error("Failed to generate a player item for \(mediaSource.name) - \(mediaSource.id)")
-            return
+        let audioStream = mediaSource.audioStreams.first { $0.id == audioID }
+        let spatialAudioKey = mediaSource.id + "/" + audioID
+        if #available(tvOS 26, *), let audioStream, SpatialAudioModel.converts(audioStream),
+           !self.spatialAudioFailures.contains(spatialAudioKey) {
+            guard let content = networkAPI.getSpatialAudioContent(
+                accessToken: accessToken,
+                contentID: mediaSource.id,
+                bitrate: bitrateBits,
+                subtitleID: subtitleID,
+                audioID: audioID,
+                videoID: videoID,
+                sessionID: sessionID
+            )
+            else {
+                Log.error("Failed to generate spatial audio URLs for \(mediaSource.name) - \(mediaSource.id)")
+                return
+            }
+            // Restarts with the usual audio and a new session, since the server may have started one for this stream's video
+            let fallback = { [weak self] (position: CMTime) in
+                guard let self else { return }
+                self.spatialAudioFailures.insert(spatialAudioKey)
+                self.playbackEnd()
+                self.playbackStart(
+                    mediaSource: mediaSource,
+                    videoID: videoID,
+                    audioID: audioID,
+                    subtitleID: subtitleID,
+                    bitrate: bitrate,
+                    title: title,
+                    subtitle: subtitle,
+                    startTime: position,
+                    player: player
+                )
+            }
+            player.replaceCurrentItem(with: nil) // Nothing to show until the stream has started
+            self.spatialAudioStart = Task {
+                guard let spatialAudio = await SpatialAudioModel.start(
+                    file: content.file,
+                    videoPlaylist: content.videoPlaylist,
+                    audioStream: audioStream,
+                    mediaSource: mediaSource,
+                    startTime: startTime,
+                    player: player,
+                    makeItem: { url in
+                        let item = AVPlayerItem(url: url)
+                        item.setupForStreaming(title: title, subtitle: subtitle)
+                        return item
+                    },
+                    fallback: fallback
+                )
+                else {
+                    if !Task.isCancelled { fallback(startTime) }
+                    return
+                }
+                guard !Task.isCancelled else {
+                    spatialAudio.stop()
+                    return
+                }
+                self.spatialAudio = spatialAudio
+                spatialAudio.play(from: startTime)
+            }
         }
-        player.replaceCurrentItem(with: playerItem)
+        else {
+            guard let playerItem = networkAPI.getStreamingContent(
+                accessToken: accessToken,
+                contentID: mediaSource.id,
+                bitrate: bitrateBits,
+                subtitleID: subtitleID,
+                audioID: audioID,
+                videoID: videoID,
+                sessionID: sessionID,
+                title: title,
+                subtitle: subtitle
+            )
+            else {
+                Log.error("Failed to generate a player item for \(mediaSource.name) - \(mediaSource.id)")
+                return
+            }
+            player.replaceCurrentItem(with: playerItem)
+            player.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero)
+            player.play()
+        }
 
         self.playerProgress = JellyfinPlayerProgress(
             player: player,
@@ -735,6 +814,14 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
     public func playbackEnd() {
         self.playerProgress?.stop()
         self.playerProgress = nil
+        self.spatialAudioStart?.cancel()
+        self.spatialAudioStart = nil
+        self.spatialAudio?.stop()
+        self.spatialAudio = nil
+    }
+
+    public func noteSeek(to target: CMTime) {
+        self.spatialAudio?.noteSeek(to: target)
     }
 
     public static func getProfileImageURL(userID: String, serviceURL: URL) -> URL? {
@@ -808,7 +895,7 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
         self.playbackSessionID = playbackSessionID
         self.userSessionID = userSessionID
         self.accessToken = accessToken
-        let playbackPos = TimeInterval(self.player.currentTime().seconds).ticks
+        let playbackPos = self.playbackTicks
         Task {
             try? await self.network.updatePlaybackStatus(
                 mediaSourceID: self.mediaSource.id,
@@ -825,6 +912,12 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
 
     deinit { self.playerProgressTask?.cancel() }
 
+    /// Current playback position in ticks. Holds the start point while the player has no item, as while spatial audio starts
+    private var playbackTicks: Int {
+        guard self.player.currentItem != nil else { return self.mediaSource.startPoint.ticks }
+        return TimeInterval(self.player.currentTime().seconds).ticks
+    }
+
     public func start() {
         // Run the progress loop off the main thread so periodic reporting never hitches the UI.
         self.playerProgressTask = Task { [weak self] in
@@ -838,7 +931,7 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
                 default: playbackStatus = .paused
                 }
 
-                let playbackPos = TimeInterval(self.player.currentTime().seconds).ticks
+                let playbackPos = self.playbackTicks
                 try? await self.network.updatePlaybackStatus(
                     mediaSourceID: self.mediaSource.id,
                     audioStreamIndex: self.audioID,
@@ -855,7 +948,7 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
     }
 
     public func stop() {
-        let playbackTicks = TimeInterval(self.player.currentTime().seconds).ticks
+        let playbackTicks = self.playbackTicks
         self.playerProgressTask?.cancel()
         self.mediaSource.startPoint = TimeInterval(ticks: playbackTicks)
         Task {

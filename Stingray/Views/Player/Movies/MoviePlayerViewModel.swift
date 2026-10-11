@@ -125,13 +125,12 @@ public final class MoviePlayerViewModel: AVPlayerViewModelProtocol, Hashable {
             bitrate: bitrate ?? self.playerProgress?.bitrate,
             title: self.media.title,
             subtitle: self.mediaSource.name,
+            startTime: startTime,
             player: self.player
         )
 
         self.player.preventsDisplaySleepDuringVideoPlayback = true // Should be default, but oh well
         self.playerProgress = streamingService.playerProgress // Sync to view model
-        self.player.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero)
-        self.player.play()
     }
 
     /// Pauses playback and tells the server this session is over, and drops `playerProgress`

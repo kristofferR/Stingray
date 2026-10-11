@@ -71,6 +71,25 @@ public protocol AdvancedNetworkProtocol {
         title: String,
         subtitle: String?
     ) -> AVPlayerItem?
+    /// Generates the URLs for playing a TrueHD Atmos or DTS:X track through SpatialAudioBridge
+    /// - Parameters:
+    ///   - accessToken: Access token for the server
+    ///   - contentID: The media source ID
+    ///   - bitrate: Target video bitrate in bits per second
+    ///   - subtitleID: Subtitles to be used (nil for none)
+    ///   - audioID: Audio ID to be used
+    ///   - videoID: Video ID to be used
+    ///   - sessionID: A one-off token to not be reused when changing settings
+    /// - Returns: The original file to convert the audio from, and an HLS multivariant playlist for the video
+    func getSpatialAudioContent(
+        accessToken: String,
+        contentID: String,
+        bitrate: Int,
+        subtitleID: String?,
+        audioID: String,
+        videoID: String,
+        sessionID: String
+    ) -> (file: URL, videoPlaylist: URL)?
     /// Updates the server about the current playback status
     /// - Parameters:
     ///   - mediaSourceID: Media source ID of the currently played content
@@ -677,6 +696,88 @@ public final class JellyfinAdvancedNetwork: AdvancedNetworkProtocol {
         title: String,
         subtitle: String?
     ) -> AVPlayerItem? {
+        var params = self.streamingParams(
+            contentID: contentID,
+            bitrate: bitrate,
+            subtitleID: subtitleID,
+            audioID: audioID,
+            videoID: videoID,
+            sessionID: sessionID
+        )
+        params.append(contentsOf: [
+            // Audio config
+            URLQueryItem(name: "audioCodec", value: "aac,ac3,eac3,alac,mp3"),
+            URLQueryItem(name: "allowAudioStreamCopy", value: "true"),
+            URLQueryItem(name: "enableAudioVbrEncoding", value: "true")
+        ])
+
+        guard let item = self.buildAVPlayerItem(
+            path: "/Videos/\(contentID)/main.m3u8",
+            urlParams: params,
+            // TODO: remove X-MediaBrowser-Token when the backward compatibility is no longer required
+            headers: ["X-MediaBrowser-Token": accessToken, "Authorization": network.buildAuthHeader(accessToken: accessToken)]
+        ) else {
+            Log.error("Failed to build the AVPlayerItem")
+            return nil
+        }
+        item.setupForStreaming(title: title, subtitle: subtitle)
+        return item
+    }
+
+    public func getSpatialAudioContent(
+        accessToken: String,
+        contentID: String,
+        bitrate: Int,
+        subtitleID: String?,
+        audioID: String,
+        videoID: String,
+        sessionID: String
+    ) -> (file: URL, videoPlaylist: URL)? {
+        // AVPlayer loads the playlist's variants and segments without headers, so the URLs carry the token
+        let apiKey = URLQueryItem(name: "ApiKey", value: accessToken)
+        var playlistParams = self.streamingParams(
+            contentID: contentID,
+            bitrate: bitrate,
+            subtitleID: subtitleID,
+            audioID: audioID,
+            videoID: videoID,
+            sessionID: sessionID
+        )
+        playlistParams.append(contentsOf: [
+            // SpatialAudioBridge replaces the server's audio, so keep it small
+            URLQueryItem(name: "audioCodec", value: "aac"),
+            URLQueryItem(name: "transcodingMaxAudioChannels", value: "2"),
+            URLQueryItem(name: "audioBitRate", value: "128000"),
+            URLQueryItem(name: "allowAudioStreamCopy", value: "false"),
+            apiKey
+        ])
+
+        guard let file = network.buildURL(
+            path: "/Videos/\(contentID)/stream",
+            urlParams: [URLQueryItem(name: "static", value: "true"), URLQueryItem(name: "mediaSourceID", value: contentID), apiKey]
+        ),
+              let videoPlaylist = network.buildURL(path: "/Videos/\(contentID)/master.m3u8", urlParams: playlistParams)
+        else { return nil }
+        return (file, videoPlaylist)
+    }
+
+    /// Stream selection, video, and streaming parameters shared by every HLS request for a media source
+    /// - Parameters:
+    ///   - contentID: The media source ID
+    ///   - bitrate: Target video bitrate in bits per second
+    ///   - subtitleID: Subtitles to be used (nil for none)
+    ///   - audioID: Audio ID to be used
+    ///   - videoID: Video ID to be used
+    ///   - sessionID: A one-off token to not be reused when changing settings
+    /// - Returns: URL parameters, without the audio config
+    private func streamingParams(
+        contentID: String,
+        bitrate: Int,
+        subtitleID: String?,
+        audioID: String,
+        videoID: String,
+        sessionID: String
+    ) -> [URLQueryItem] {
         let capabilities = AppleTVCapabilities.current
 
         var videoParams: [URLQueryItem] = [
@@ -717,11 +818,6 @@ public final class JellyfinAdvancedNetwork: AdvancedNetworkProtocol {
         ]
         params.append(contentsOf: videoParams)
         params.append(contentsOf: [
-            // Audio config
-            URLQueryItem(name: "audioCodec", value: "aac,ac3,eac3,alac,mp3"),
-            URLQueryItem(name: "allowAudioStreamCopy", value: "true"),
-            URLQueryItem(name: "enableAudioVbrEncoding", value: "true"),
-            
             // Streaming config
             URLQueryItem(name: "breakOnNonKeyFrames", value: "true"),
             URLQueryItem(name: "requireAVC", value: "false"),
@@ -734,37 +830,7 @@ public final class JellyfinAdvancedNetwork: AdvancedNetworkProtocol {
             params.append(URLQueryItem(name: "SubtitleMethod", value: "Encode"))
             params.append(URLQueryItem(name: "subtitleStreamIndex", value: String(subtitleID)))
         }
-        
-        guard let item = self.buildAVPlayerItem(
-            path: "/Videos/\(contentID)/main.m3u8",
-            urlParams: params,
-            // TODO: remove X-MediaBrowser-Token when the backward compatibility is no longer required
-            headers: ["X-MediaBrowser-Token": accessToken, "Authorization": network.buildAuthHeader(accessToken: accessToken)]
-        ) else {
-            Log.error("Failed to build the AVPlayerItem")
-            return nil
-        }
-
-        // Set the title metadata
-        let titleMetadata = AVMutableMetadataItem()
-        titleMetadata.identifier = .commonIdentifierTitle
-        titleMetadata.value = title as NSString
-        titleMetadata.extendedLanguageTag = "und"
-        
-        // Set the subtitle/description metadata
-        let subtitleMetadata = AVMutableMetadataItem()
-        subtitleMetadata.identifier = .iTunesMetadataTrackSubTitle
-        subtitleMetadata.value = (subtitle ?? "") as NSString // Empty string for no subtitle
-        subtitleMetadata.extendedLanguageTag = "und"
-        
-        item.externalMetadata = [titleMetadata, subtitleMetadata]
-        item.audioTimePitchAlgorithm = .spectral
-        
-        // Setup streaming buffering
-        item.preferredForwardBufferDuration = TimeInterval(600) // 10 minutes
-        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true // Allow buffering while paused
-        
-        return item
+        return params
     }
     
     public func updatePlaybackStatus(

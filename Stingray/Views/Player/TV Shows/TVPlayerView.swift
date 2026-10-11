@@ -70,6 +70,7 @@ fileprivate struct AVPlayerViewControllerRepresentable: UIViewControllerRepresen
             onStartPiP: self.onStartPiP,
             onRestoreFromPiP: self.onRestoreFromPiP,
             onStopFromPiP: self.onStopFromPiP,
+            onSeek: { self.vm.streamingService.noteSeek(to: $0) },
         )
 
         // Should we kill the current PiP stream because the user is now watching something new?
