@@ -161,6 +161,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     /// - Parameter startTime: Where to start
     private func run(from startTime: CMTime) async {
         guard await self.load(at: startTime) else { return }
+        if self.player.rate == 0 { self.player.play() } // Unless a playback speed was set while the stream started
 
         var status = self.player.timeControlStatus
         var changed = ContinuousClock.now
@@ -186,14 +187,12 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
         }
     }
 
-    /// Puts a fresh item for the stream in the player and plays it from `time` at the current playback speed
+    /// Puts a fresh item for the stream in the player and seeks it to `time`. The player keeps its rate, so its playback speed, or a pause
+    /// while seeking, carries over.
     /// - Parameter time: Where to play from
     /// - Returns: False if the stream stopped meanwhile
     private func load(at time: CMTime) async -> Bool {
         guard !Task.isCancelled else { return false }
-        let rate = self.player.rate // Includes a speed set while the stream started
-        self.player.pause() // Don't play the new item from its beginning while seeking
-
         let item = self.makeItem(self.playlist)
         self.item = item
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
@@ -207,10 +206,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
         self.player.replaceCurrentItem(with: item)
 
         await self.player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-        guard !Task.isCancelled else { return false }
-        if rate > 0 { self.player.rate = rate }
-        else { self.player.play() }
-        return true
+        return !Task.isCancelled
     }
 
     /// Plays the usual audio instead, once the stream has failed

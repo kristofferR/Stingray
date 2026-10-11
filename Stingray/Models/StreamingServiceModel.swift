@@ -729,6 +729,7 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
             // Restarts with the usual audio and a new session, since the server may have started one for this stream's video
             let fallback = { [weak self] (position: CMTime) in
                 guard let self else { return }
+                let rate = player.rate
                 self.spatialAudioFailures.insert(spatialAudioKey)
                 self.playbackEnd()
                 self.playbackStart(
@@ -742,6 +743,7 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
                     startTime: position,
                     player: player
                 )
+                if rate > 0 { player.rate = rate } // Keep the viewer's playback speed
             }
             player.replaceCurrentItem(with: nil) // Nothing to show until the stream has started
             self.spatialAudioStart = Task {
@@ -802,7 +804,8 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
             bitrate: bitrateBits,
             playbackSessionID: sessionID,
             userSessionID: self.sessionID,
-            accessToken: self.accessToken
+            accessToken: self.accessToken,
+            startTime: startTime
         )
         self.playerProgress?.start()
     }
@@ -867,6 +870,8 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
     private let userSessionID: String
     /// API access token.
     private let accessToken: String
+    /// Where playback starts, reported until the player has an item
+    private let startTime: CMTime
 
     public init(
         player: AVPlayer,
@@ -878,7 +883,8 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
         bitrate: Int,
         playbackSessionID: String,
         userSessionID: String,
-        accessToken: String
+        accessToken: String,
+        startTime: CMTime
     ) {
         self.player = player
         self.network = network
@@ -891,6 +897,7 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
         self.playbackSessionID = playbackSessionID
         self.userSessionID = userSessionID
         self.accessToken = accessToken
+        self.startTime = startTime
         let playbackPos = self.playbackTicks
         Task {
             try? await self.network.updatePlaybackStatus(
@@ -908,10 +915,10 @@ public final class JellyfinPlayerProgress: PlayerProtocol {
 
     deinit { self.playerProgressTask?.cancel() }
 
-    /// Current playback position in ticks. Holds the start point while the player has no item, as while spatial audio starts
+    /// Current playback position in ticks. Holds the start time while the player has no item, as while spatial audio starts
     private var playbackTicks: Int {
-        guard self.player.currentItem != nil else { return self.mediaSource.startPoint.ticks }
-        return TimeInterval(self.player.currentTime().seconds).ticks
+        let position = self.player.currentItem == nil ? self.startTime : self.player.currentTime()
+        return TimeInterval(position.seconds).ticks
     }
 
     public func start() {
