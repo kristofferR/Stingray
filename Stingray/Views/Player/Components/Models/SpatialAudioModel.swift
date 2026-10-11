@@ -195,6 +195,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     /// - Returns: False if the stream stopped meanwhile
     private func load(at time: CMTime) async -> Bool {
         guard !Task.isCancelled else { return false }
+        self.pendingSeek = (time, .now) // Until playback gets going, `currentTime()` may not reach it yet
         let item = self.makeItem(self.playlist)
         self.item = item
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
@@ -211,11 +212,11 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
         return !Task.isCancelled
     }
 
-    /// Plays the usual audio instead, once the stream has failed
+    /// Plays the usual audio instead, once the stream has failed, from where the viewer was or was seeking to
     /// - Parameter error: Why it failed, if known
     private func fail(_ error: Error?) {
         Log.warning("Spatial audio failed, so playing the usual audio: \(error?.localizedDescription ?? "Unknown error")")
-        self.fallback(self.player.currentTime())
+        self.fallback(self.pendingSeek?.target ?? self.player.currentTime())
     }
 
     public func noteSeek(to target: CMTime) {
