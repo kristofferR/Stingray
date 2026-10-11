@@ -729,7 +729,9 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
             // Restarts with the usual audio and a new session, since the server may have started one for this stream's video
             let fallback = { [weak self] (position: CMTime) in
                 guard let self else { return }
+                // Keep the viewer's playback speed, or their pause once spatial audio was playing
                 let rate = player.rate
+                let keepsPause = self.spatialAudio != nil
                 self.spatialAudioFailures.insert(spatialAudioKey)
                 self.playbackEnd()
                 self.playbackStart(
@@ -743,7 +745,8 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
                     startTime: position,
                     player: player
                 )
-                if rate > 0 { player.rate = rate } // Keep the viewer's playback speed
+                if rate > 0 { player.rate = rate }
+                else if keepsPause { player.pause() }
             }
             player.replaceCurrentItem(with: nil) // Nothing to show until the stream has started
             self.spatialAudioStart = Task {
