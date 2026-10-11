@@ -761,14 +761,12 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
                 guard let spatialAudio = await SpatialAudioModel.start(
                     file: content.file,
                     videoPlaylist: content.videoPlaylist,
-                    headers: content.headers,
                     audioStream: audioStream,
                     mediaSource: mediaSource,
                     startTime: startTime,
                     player: player,
                     makeItem: { url in
-                        // AVPlayer sends the headers with every request for the asset, including the server's variants and segments
-                        let item = AVPlayerItem(asset: AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": content.headers]))
+                        let item = AVPlayerItem(url: url)
                         item.setupForStreaming(title: title, subtitle: subtitle)
                         return item
                     },

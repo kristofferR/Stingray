@@ -30,6 +30,7 @@ public final class Log {
     /// - Note: Meant for variable values, flow tracing, and other debugging.
     /// - Important: Logs are set to public, so show no secrets.
     public static func debug(_ message: String) {
+        let message = Self.redacted(message)
         Log.shared.logger.debug("\(message, privacy: .public)")
         Log.lastLogEntry = LogEntry(message: message, level: .debug, previous: Log.lastLogEntry)
     }
@@ -39,6 +40,7 @@ public final class Log {
     /// - Note: Data only slightly more important than debug info, like a profile loading, or an API completed setup,
     /// - Important: Logs are set to public, so show no secrets.
     public static func info(_ message: String) {
+        let message = Self.redacted(message)
         Log.shared.logger.info("\(message, privacy: .public)")
         Log.lastLogEntry = LogEntry(message: message, level: .info, previous: Log.lastLogEntry)
     }
@@ -48,6 +50,7 @@ public final class Log {
     /// - Note: Meant to display a recoverable issue, and perhaps a retry was attempted, like a missing key in JSON.
     /// - Important: Logs are set to public, so show no secrets.
     public static func warning(_ message: String) {
+        let message = Self.redacted(message)
         Log.shared.logger.warning("\(message, privacy: .public)")
         Log.lastLogEntry = LogEntry(message: message, level: .warning, previous: Log.lastLogEntry)
     }
@@ -57,15 +60,24 @@ public final class Log {
     /// - Note: Something is unrecoverable, like a library failed to load.
     /// - Important: Logs are set to public, so show no secrets.
     public static func error(_ message: String) {
+        let message = Self.redacted(message)
         Log.shared.logger.error("\(message, privacy: .public)")
         Log.lastLogEntry = LogEntry(message: message, level: .error, previous: Log.lastLogEntry)
     }
     
+    /// Hides the value of every `ApiKey` URL parameter, since spatial audio's stream URLs carry the access token in one.
+    /// - Parameter message: Message to log
+    /// - Returns: The message without access tokens
+    private static func redacted(_ message: String) -> String {
+        message.replacingOccurrences(of: #"(?i)(api_?key=)[^&\s"]+"#, with: "$1<redacted>", options: .regularExpression)
+    }
+
     /// The app can no longer function. Use sparingly.
     /// - Parameter message: Message to save.
     /// - Note: Completely unrecoverable, the user is either stuck or the app is about to crash.
     /// - Important: Logs are set to public, so show no secrets.
     public static func critical(_ message: String) {
+        let message = Self.redacted(message)
         Log.shared.logger.critical("\(message, privacy: .public)")
         Log.lastLogEntry = LogEntry(message: message, level: .critical, previous: Log.lastLogEntry)
     }
