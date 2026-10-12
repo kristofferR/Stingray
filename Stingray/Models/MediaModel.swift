@@ -108,6 +108,10 @@ public protocol MediaStreamProtocol: Identifiable {
     var codec: String { get }
     /// Is considered the default stream by the server.
     var isDefault: Bool { get }
+    /// Codec profile reported by the server. Ex. "DTS-HD MA" or "Dolby TrueHD + Dolby Atmos". Empty when the server reports none.
+    var profile: String { get }
+    /// Whether the stream comes from a separate file instead of the media source's own container. Ex. a sidecar subtitle file.
+    var isExternal: Bool { get }
 }
 
 /// Describes how to hold information about a TV Season
@@ -372,6 +376,10 @@ public final class MediaStream: Decodable, Equatable, MediaStreamProtocol {
     public var bitrate: Int
     public var codec: String
     public var isDefault: Bool
+    /// Codec profile reported by the server. Ex. "DTS-HD MA". Empty when the server reports none.
+    public var profile: String
+    /// Whether the stream comes from a separate file instead of the media source's own container
+    public var isExternal: Bool
     
     public enum CodingKeys: String, CodingKey {
         case id = "Index"
@@ -380,6 +388,8 @@ public final class MediaStream: Decodable, Equatable, MediaStreamProtocol {
         case bitrate = "BitRate"
         case codec = "Codec"
         case isDefault = "IsDefault"
+        case profile = "Profile"
+        case isExternal = "IsExternal"
     }
     
     /// Create a `MediaStream` from JSON.
@@ -398,6 +408,8 @@ public final class MediaStream: Decodable, Equatable, MediaStreamProtocol {
             title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Unknown stream"
             codec = try container.decodeIfPresent(String.self, forKey: .codec) ?? ""
             isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
+            profile = try container.decodeIfPresent(String.self, forKey: .profile) ?? ""
+            isExternal = try container.decodeIfPresent(Bool.self, forKey: .isExternal) ?? false
             bitrate = try container.decodeIfPresent(Int.self, forKey: .bitrate) ?? 10000
             if codec == "av1" {
                 bitrate = Int(Double(bitrate) * 1.75) // AV1 isn't supported, but it's so good that we need way more bits
@@ -411,13 +423,20 @@ public final class MediaStream: Decodable, Equatable, MediaStreamProtocol {
         catch let error { throw JSONError.failedJSONDecode("MediaStream", error) }
     }
     
+    /// Streams are equal when every decoded field matches
+    /// - Parameters:
+    ///   - lhs: A stream to compare
+    ///   - rhs: Another stream to compare
+    /// - Returns: Whether both streams describe the same server stream
     public static func == (lhs: MediaStream, rhs: MediaStream) -> Bool {
         lhs.id == rhs.id &&
         lhs.title == rhs.title &&
         lhs.type == rhs.type &&
         lhs.bitrate == rhs.bitrate &&
         lhs.codec == rhs.codec &&
-        lhs.isDefault == rhs.isDefault
+        lhs.isDefault == rhs.isDefault &&
+        lhs.profile == rhs.profile &&
+        lhs.isExternal == rhs.isExternal
     }
 }
 

@@ -125,6 +125,7 @@ public final class MoviePlayerViewModel: AVPlayerViewModelProtocol, Hashable {
             bitrate: bitrate ?? self.playerProgress?.bitrate,
             title: self.media.title,
             subtitle: self.mediaSource.name,
+            startTime: startTime,
             player: self.player
         )
 
@@ -138,7 +139,8 @@ public final class MoviePlayerViewModel: AVPlayerViewModelProtocol, Hashable {
     public func stopPlayer() {
         player.pause()
         self.playerProgress = nil
-        streamingService.playbackEnd()
+        // Leave a newer player's session alone, as when this player's PiP ends after another title started
+        if streamingService.playerProgress?.player === self.player { streamingService.playbackEnd() }
     }
 
     public func changeSpeed(_ speed: PlaybackSpeed) {
