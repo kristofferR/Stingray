@@ -183,8 +183,8 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
     @ObservationIgnored private var spatialAudio: SpatialAudioProtocol?
     /// Starts `spatialAudio`
     @ObservationIgnored private var spatialAudioStart: Task<Void, Never>?
-    /// Audio tracks SpatialAudioBridge refused, which play the usual audio from then on
-    @ObservationIgnored private var spatialAudioFailures: Set<String> = []
+    /// Decoder refusals for loaded source snapshots; refreshed sources and other inputs may try again.
+    @ObservationIgnored private var spatialAudioFailures: Set<SpatialAudioRefusalKey> = []
 
     /// Create a `JellyfinModel` based on known data.
     /// - Parameters:
@@ -742,8 +742,9 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
         let bitrateBits = bitrate ?? videoStream.bitrate
 
         let audioStream = mediaSource.audioStreams.first { $0.id == audioID }
-        let spatialAudioKey = [mediaSource.id, audioID].joined(separator: "/")
         if #available(tvOS 26, *), allowsSpatialAudio, let audioStream, SpatialAudioModel.converts(audioStream),
+           let spatialAudioKey = SpatialAudioRefusalKey(serverID: self.serverID, serviceURL: self.serviceURL,
+                                                       source: mediaSource, audio: audioStream),
            !self.spatialAudioFailures.contains(spatialAudioKey),
            let content = networkAPI.getSpatialAudioContent(
                accessToken: accessToken,
@@ -839,7 +840,7 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
     ///   - startTime: Where playback starts
     ///   - player: Player to play through
     ///   - fallback: Plays the usual audio from the given time
-    ///   - failureKey: Audio track to remember if SpatialAudioBridge refuses it
+    ///   - failureKey: Source snapshot and audio input to remember if decoding is refused
     @available(tvOS 26, *)
     private func startSpatialAudio(
         content: SpatialAudioContent,
@@ -850,7 +851,7 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
         startTime: CMTime,
         player: AVPlayer,
         fallback: @escaping (CMTime) -> Void,
-        failureKey: String
+        failureKey: SpatialAudioRefusalKey
     ) {
         player.replaceCurrentItem(with: nil) // Nothing to show until the stream has started
         self.spatialAudioStart = Task {

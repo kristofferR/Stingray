@@ -38,6 +38,8 @@ public protocol MediaProtocol: Identifiable, MediaRepresentableProtocol, Hashabl
 public protocol MediaSourceProtocol: Identifiable {
     /// ID provided by the server
     var id: String { get }
+    /// Identity of this loaded metadata snapshot; refreshed sources must not inherit audio refusals.
+    var snapshotID: UUID { get }
     /// Name of the media source. Ex. different versions of the same movie.
     var name: String { get }
     /// All available video streams for the source.
@@ -310,6 +312,8 @@ public final class MediaModel: MediaProtocol, Decodable {
 @Observable
 public final class MediaSource: Decodable, MediaSourceProtocol {
     public var id: String
+    /// Fresh whenever source metadata is decoded, even when the server reuses its ID.
+    public let snapshotID = UUID()
     public var name: String
     public var videoStreams: [any MediaStreamProtocol]
     public var audioStreams: [any MediaStreamProtocol]
