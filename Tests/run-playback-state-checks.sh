@@ -35,7 +35,7 @@ end
     block(text, 'public func newPlayer(') + "\n" + block(text, 'public func stopPlayer()') + "\n}"
 end
 parts << "public final class SpatialAudioModel {\n" + block(spatial, 'public enum StartError:') + "\n" +
-  block(spatial, 'public static func start(') + <<~SWIFT
+  block(spatial, 'public static func start(') + "\n" + <<~SWIFT
   static var nextError: (any Error)?
   var played = false
   static func open(content: SpatialAudioContent, audioStream: any MediaStreamProtocol,
@@ -48,7 +48,7 @@ parts << "public final class SpatialAudioModel {\n" + block(spatial, 'public enu
   func stop() {}
   }
 SWIFT
-parts << "final class FailureHost {\n" + block(service, 'private func startSpatialAudio(') + <<~SWIFT
+parts << "final class FailureHost {\n" + block(service, 'private func startSpatialAudio(') + "\n" + <<~SWIFT
   var spatialAudioStart: Task<Void, Never>?
   var spatialAudio: SpatialAudioModel?
   var spatialAudioFailures: Set<SpatialAudioRefusalKey> = []
