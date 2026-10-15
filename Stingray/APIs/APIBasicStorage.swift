@@ -172,8 +172,10 @@ public final class HybridBasicStorage: BasicStorageProtocol {
     
     /// Sets up storage for local and cloud syncing
     public init() throws(BasicStorageErrors) {
-        // Setup local storage
-        guard let defaults = UserDefaults(suiteName: "group.com.benlab.stingray") // Use a group to sync with extensions (ex TopShelf)
+        // Share the configured group with TopShelf; never silently switch to a different store.
+        guard let group = Bundle.main.object(forInfoDictionaryKey: "StingrayAppGroupIdentifier") as? String,
+              !group.isEmpty, !group.contains("$("),
+              let defaults = UserDefaults(suiteName: group)
         else { throw .userDefaultsSetup }
         self.defaults = defaults
         

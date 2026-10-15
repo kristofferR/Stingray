@@ -39,6 +39,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F7317FA1234F4C4FA110E501 /* Identity.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Identity.xcconfig; sourceTree = "<group>"; };
 		B5625A4C2EC4EDF500C0507C /* Stingray.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Stingray.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B593D4B32EEB58090015EB83 /* TopShelf.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TopShelf.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B593D4B52EEB58090015EB83 /* TVServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = TVServices.framework; path = System/Library/Frameworks/TVServices.framework; sourceTree = SDKROOT; };
@@ -123,6 +124,7 @@
 		B5625A432EC4EDF500C0507C = {
 			isa = PBXGroup;
 			children = (
+				F7317FA1234F4C4FA110E501 /* Identity.xcconfig */,
 				B5625A4E2EC4EDF500C0507C /* Stingray */,
 				B593D4B72EEB58090015EB83 /* TopShelf */,
 				B593D4B42EEB58090015EB83 /* Frameworks */,
@@ -292,6 +294,7 @@
 /* Begin XCBuildConfiguration section */
 		B5625A552EC4EDF700C0507C /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F7317FA1234F4C4FA110E501 /* Identity.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -359,6 +362,7 @@
 		};
 		B5625A562EC4EDF700C0507C /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F7317FA1234F4C4FA110E501 /* Identity.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -438,7 +442,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.5.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.benlab.Stingray;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(STINGRAY_APP_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -472,7 +476,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.5.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.benlab.Stingray;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(STINGRAY_APP_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -503,7 +507,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.5.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.benlab.Stingray.TopShelf;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(STINGRAY_TOP_SHELF_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -534,7 +538,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.5.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.benlab.Stingray.TopShelf;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(STINGRAY_TOP_SHELF_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

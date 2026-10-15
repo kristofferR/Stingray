@@ -4,6 +4,8 @@
 <dict>
 	<key>AppIdentifierPrefix</key>
 	<string>$(AppIdentifierPrefix)</string>
+	<key>StingrayAppGroupIdentifier</key>
+	<string>$(STINGRAY_APP_GROUP)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

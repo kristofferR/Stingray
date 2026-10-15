@@ -1,0 +1,7 @@
+// Preserve the published app's identities. Forks can override the two roots with an external -xcconfig file.
+STINGRAY_APP_ID = com.benlab.Stingray
+STINGRAY_STORAGE_ID = com.benlab.stingray
+
+STINGRAY_TOP_SHELF_ID = $(STINGRAY_APP_ID).TopShelf
+STINGRAY_APP_GROUP = group.$(STINGRAY_STORAGE_ID)
+STINGRAY_KEYCHAIN_GROUP = $(AppIdentifierPrefix)$(STINGRAY_STORAGE_ID)
