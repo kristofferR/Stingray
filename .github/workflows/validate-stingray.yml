@@ -1,0 +1,212 @@
+name: Validate Stingray
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact app commit beneath the workflow-only CI commit
+        required: true
+        type: string
+      app_identifier:
+        description: Optional app ID supplied outside the source tree
+        required: false
+        type: string
+      storage_identifier:
+        description: Optional shared storage root supplied outside the source tree
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stingray-cloud-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'kristofferR/Stingray' && startsWith(github.ref, 'refs/heads/ci/stingray-')
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      APP_IDENTIFIER: ${{ inputs.app_identifier }}
+      STORAGE_IDENTIFIER: ${{ inputs.storage_identifier }}
+      LOCKFILE: Stingray.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+    steps:
+      - name: Checkout CI commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact candidate and toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p validation/logs
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD^)" = "$CANDIDATE_SHA"
+          test "$(git diff --name-only "$CANDIDATE_SHA" HEAD)" = '.github/workflows/validate-stingray.yml'
+          git diff --check "$CANDIDATE_SHA" HEAD
+          xcodebuild -version | tee validation/logs/toolchain.log
+          test "$(xcodebuild -version | head -n 1)" = 'Xcode 26.6'
+          git rev-parse HEAD "$CANDIDATE_SHA" > validation/logs/commits.log
+          jq -S '.pins' "$LOCKFILE" > validation/logs/packages-before.json
+          echo 'Standalone storage/configuration checks only; no app test target, media or device tests.' > validation/logs/tests.log
+
+      - name: Resolve locked packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project "Stingray.xcodeproj" -scheme "Stingray" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/StingrayPackages" \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackagePluginValidation \
+            2>&1 | tee validation/logs/resolve.log
+          jq -S '.pins' "$LOCKFILE" > validation/logs/packages-after.json
+          diff -u validation/logs/packages-before.json validation/logs/packages-after.json
+
+      - name: Check default and external identities for both targets and configurations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, plistlib, re, subprocess
+          logs = pathlib.Path('validation/logs')
+          app = os.environ['APP_IDENTIFIER'] or 'com.example.stingray.validation'
+          storage = os.environ['STORAGE_IDENTIFIER'] or 'com.example.stingray.validation'
+          for value in (app, storage):
+              if not re.fullmatch(r'[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)+', value):
+                  raise SystemExit('Invalid identity input')
+          if bool(os.environ['APP_IDENTIFIER']) != bool(os.environ['STORAGE_IDENTIFIER']):
+              raise SystemExit('Supply both identity inputs or neither')
+          override = pathlib.Path(os.environ['RUNNER_TEMP']) / 'StingrayIdentity.xcconfig'
+          override.write_text(f'STINGRAY_APP_ID = {app}\nSTINGRAY_STORAGE_ID = {storage}\n')
+          archive_override = pathlib.Path(os.environ['RUNNER_TEMP']) / 'StingrayArchiveIdentity.xcconfig'
+          archive_override.write_text(override.read_text() if os.environ['APP_IDENTIFIER'] else '// Use upstream defaults.\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              # The archive uses supplied external identities, or the untouched upstream defaults.
+              env.write(f'IDENTITY_OVERRIDE={archive_override}\n')
+          for mode, root, shared in [('defaults', 'com.benlab.Stingray', 'com.benlab.stingray'), ('override', app, storage)]:
+              for configuration in ['Debug', 'Release']:
+                  for target in ['Stingray', 'TopShelf']:
+                      command = ['xcodebuild', '-project', 'Stingray.xcodeproj', '-target', target,
+                                 '-configuration', configuration, '-showBuildSettings', '-json',
+                                 '-clonedSourcePackagesDirPath', os.environ['RUNNER_TEMP'] + '/StingrayPackages',
+                                 '-disableAutomaticPackageResolution', '-onlyUsePackageVersionsFromResolvedFile',
+                                 '-skipPackagePluginValidation', 'CODE_SIGNING_ALLOWED=NO', 'AppIdentifierPrefix=CI01234567.']
+                      if mode == 'override': command += ['-xcconfig', str(override)]
+                      result = subprocess.run(command, check=True, capture_output=True, text=True)
+                      (logs / f'{mode}-{configuration}-{target}.json').write_text(result.stdout)
+                      settings = next(v['buildSettings'] for v in json.loads(result.stdout) if v['target'] == target)
+                      bundle = root if target == 'Stingray' else root + '.TopShelf'
+                      assert settings['PRODUCT_BUNDLE_IDENTIFIER'] == bundle, settings['PRODUCT_BUNDLE_IDENTIFIER']
+                      assert settings['STINGRAY_APP_GROUP'] == 'group.' + shared
+                      assert settings['STINGRAY_KEYCHAIN_GROUP'] == 'CI01234567.' + shared
+                      def expand(value):
+                          return re.sub(r'\$\(([^)]+)\)', lambda m: settings[m[1]], value)
+                      info = plistlib.loads(pathlib.Path(target, 'Info.plist').read_bytes())
+                      entitlements = plistlib.loads(pathlib.Path(target, target + '.entitlements').read_bytes())
+                      assert expand(info['StingrayAppGroupIdentifier']) == 'group.' + shared
+                      assert [expand(v) for v in entitlements['com.apple.security.application-groups']] == ['group.' + shared]
+                      if target == 'TopShelf':
+                          assert [expand(v) for v in entitlements['keychain-access-groups']] == ['CI01234567.' + shared]
+                      print(f'PASS {mode} {configuration} {target}: {bundle}, group.{shared}')
+          PY
+
+      - name: Exercise the actual storage initializer with invalid configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee validation/logs/storage-probes.log
+          import os, pathlib, plistlib, subprocess
+          work = pathlib.Path(os.environ['RUNNER_TEMP']) / 'StingrayStorageProbes'
+          work.mkdir()
+          probe = work / 'Probe.swift'
+          probe.write_text('''
+          import Foundation
+          public enum BasicStorageErrors: Error { case userDefaultsSetup }
+          public enum Log { public static func critical(_ message: String) {} }
+          @main struct StorageProbe {
+              @MainActor static func main() {
+                  let value = Bundle.main.object(forInfoDictionaryKey: "StingrayAppGroupIdentifier")
+                  switch CommandLine.arguments[1] {
+                  case "missing": precondition(value == nil)
+                  case "empty": precondition(value as? String == "")
+                  case "unexpanded": precondition(value as? String == "$(STINGRAY_APP_GROUP)")
+                  case "wrongType": precondition(value as? Int == 7)
+                  default: fatalError("Unknown probe")
+                  }
+                  do {
+                      _ = try HybridBasicStorage()
+                      fatalError("Invalid identity unexpectedly opened storage")
+                  } catch {
+                      print("PASS rejected " + CommandLine.arguments[1])
+                  }
+              }
+          }
+          ''')
+          for mode in ['app', 'extension']:
+              bundle = work / (mode + '.app') / 'Contents'
+              (bundle / 'MacOS').mkdir(parents=True)
+              executable = bundle / 'MacOS/StorageProbe'
+              command = ['xcrun', 'swiftc', '-parse-as-library', '-swift-version', '5',
+                         'Stingray/APIs/APIBasicStorage.swift', str(probe), '-o', str(executable)]
+              if mode == 'app': command += ['-default-isolation', 'MainActor']
+              subprocess.run(command, check=True)
+              for case, value in [('missing', None), ('empty', ''), ('unexpanded', '$(STINGRAY_APP_GROUP)'), ('wrongType', 7)]:
+                  info = {'CFBundleExecutable': 'StorageProbe', 'CFBundlePackageType': 'APPL',
+                          'CFBundleIdentifier': 'com.example.storageprobe.' + mode}
+                  if case != 'missing': info['StingrayAppGroupIdentifier'] = value
+                  (bundle / 'Info.plist').write_bytes(plistlib.dumps(info))
+                  subprocess.run([str(executable), case], check=True)
+          PY
+
+      - name: Check track-change positions and snapshot-scoped refusals without media
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash Tests/run-playback-state-checks.sh 2>&1 | tee validation/logs/playback-state-checks.log
+
+      - name: Archive unsigned tvOS app and run the existing SwiftLint plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "Stingray.xcodeproj" -scheme "Stingray" \
+            -configuration Release -destination "generic/platform=tvOS" \
+            -archivePath "$PWD/validation/Stingray.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/StingrayDerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/StingrayPackages" \
+            -resultBundlePath "$PWD/validation/Archive.xcresult" \
+            -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackagePluginValidation -jobs 1 \
+            -xcconfig "$IDENTITY_OVERRIDE" \
+            ARCHS=arm64 CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tee validation/logs/archive.log
+          jq -S '.pins' "$LOCKFILE" > validation/logs/packages-after-archive.json
+          diff -u validation/logs/packages-before.json validation/logs/packages-after-archive.json
+          python3 - <<'PY' | tee validation/logs/archive-identities.log
+          import os, pathlib, plistlib
+          app = pathlib.Path('validation/Stingray.xcarchive/Products/Applications/Stingray.app')
+          root = os.environ['APP_IDENTIFIER'] or 'com.benlab.Stingray'
+          group = 'group.' + (os.environ['STORAGE_IDENTIFIER'] or 'com.benlab.stingray')
+          for path, identifier in [(app, root), (app / 'PlugIns/TopShelf.appex', root + '.TopShelf')]:
+              info = plistlib.loads((path / 'Info.plist').read_bytes())
+              assert info['CFBundleIdentifier'] == identifier
+              assert info['StingrayAppGroupIdentifier'] == group
+              assert not (path / '_CodeSignature').exists()
+              print(f'PASS unsigned {identifier}: {group}')
+          PY
+
+      - name: Collect CI archive and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stingray-validation-${{ github.run_id }}
+          path: validation/
+          if-no-files-found: error
+          retention-days: 7
