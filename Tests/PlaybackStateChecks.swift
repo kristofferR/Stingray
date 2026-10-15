@@ -15,14 +15,14 @@ enum SpatialAudioError: Error {
     case decoding(String), source(String), encoding(String), coreMedia(Int32)
     var description: String { String(describing: self) }
 }
-struct SpatialAudioContent {}
+public struct SpatialAudioContent {}
 final class AVAudioSession {
     enum Category { case playback }
     enum Mode { case moviePlayback }
     static func sharedInstance() -> AVAudioSession { AVAudioSession() }
     func setCategory(_ category: Category, mode: Mode) throws {}
 }
-final class AVPlayer {
+public final class AVPlayer {
     var rate: Float = 0
     var preventsDisplaySleepDuringVideoPlayback = false
     var lastSeek: CMTime?

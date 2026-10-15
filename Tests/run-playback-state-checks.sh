@@ -34,7 +34,7 @@ end
   parts << "final class #{kind}Case: PlayerHost, Switching {\n" +
     block(text, 'public func newPlayer(') + "\n" + block(text, 'public func stopPlayer()') + "\n}"
 end
-parts << "final class SpatialAudioModel {\n" + block(spatial, 'public enum StartError:') + "\n" +
+parts << "public final class SpatialAudioModel {\n" + block(spatial, 'public enum StartError:') + "\n" +
   block(spatial, 'public static func start(') + <<~SWIFT
   static var nextError: (any Error)?
   var played = false
