@@ -23,9 +23,9 @@ public protocol SpatialAudioProtocol: AnyObject {
 public final class SpatialAudioModel: SpatialAudioProtocol {
     /// Why a stream didn't start
     public enum StartError: Error {
-        /// SpatialAudioBridge can't play the track, so another try would fail too
+        /// SpatialAudioBridge can't decode the track, so another try would fail too
         case refused
-        /// The server or network failed or was too slow, which may pass
+        /// The source, encoder or network failed or was too slow, which may pass
         case unavailable
     }
 
@@ -142,8 +142,9 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
                 throw .unavailable
             }
             Log.warning("Spatial audio failed to start: \((error as? SpatialAudioError)?.description ?? error.localizedDescription)")
-            // SpatialAudioBridge refuses with its own errors, and fails like the network when the server or network does
-            throw error is SpatialAudioError ? .refused : .unavailable
+            // Only decoding refusals describe the track; source and encoder failures may pass on another try.
+            if let spatialError = error as? SpatialAudioError, case .decoding = spatialError { throw .refused }
+            throw .unavailable
         }
     }
 
