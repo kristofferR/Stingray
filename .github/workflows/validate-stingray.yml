@@ -1,0 +1,87 @@
+name: Validate Stingray
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact app commit beneath the workflow-only CI commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stingray-cloud-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'kristofferR/Stingray' && startsWith(github.ref, 'refs/heads/ci/stingray-')
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      LOCKFILE: Stingray.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+    steps:
+      - name: Checkout CI commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact candidate and toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p validation/logs
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD^)" = "$CANDIDATE_SHA"
+          test "$(git diff --name-only "$CANDIDATE_SHA" HEAD)" = '.github/workflows/validate-stingray.yml'
+          git diff --check "$CANDIDATE_SHA" HEAD
+          xcodebuild -version | tee validation/logs/toolchain.log
+          test "$(xcodebuild -version | head -n 1)" = 'Xcode 26.6'
+          git rev-parse HEAD "$CANDIDATE_SHA" > validation/logs/commits.log
+          jq -S '.pins' "$LOCKFILE" > validation/logs/packages-before.json
+          echo 'No app test target or test plan exists; no media or device tests run.' > validation/logs/tests.log
+
+      - name: Resolve locked packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project "Stingray.xcodeproj" -scheme "Stingray" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/StingrayPackages" \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackagePluginValidation \
+            2>&1 | tee validation/logs/resolve.log
+          jq -S '.pins' "$LOCKFILE" > validation/logs/packages-after.json
+          diff -u validation/logs/packages-before.json validation/logs/packages-after.json
+
+      - name: Archive unsigned tvOS app and run the existing SwiftLint plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "Stingray.xcodeproj" -scheme "Stingray" \
+            -configuration Release -destination "generic/platform=tvOS" \
+            -archivePath "$PWD/validation/Stingray.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/StingrayDerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/StingrayPackages" \
+            -resultBundlePath "$PWD/validation/Archive.xcresult" \
+            -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackagePluginValidation -jobs 1 \
+            ARCHS=arm64 CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tee validation/logs/archive.log
+          jq -S '.pins' "$LOCKFILE" > validation/logs/packages-after-archive.json
+          diff -u validation/logs/packages-before.json validation/logs/packages-after-archive.json
+
+      - name: Collect CI archive and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stingray-validation-${{ github.run_id }}
+          path: validation/
+          if-no-files-found: error
+          retention-days: 7
