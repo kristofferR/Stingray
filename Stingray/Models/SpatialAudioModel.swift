@@ -101,8 +101,8 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
     }
 
     // AI Generated
-    /// Starts converting an audio stream, without touching the player yet. Gives up after 25 seconds, as a busy server can make the
-    /// start slow.
+    /// Starts converting an audio stream, without touching the player yet. Requests cancellation after 25 seconds and rejects late
+    /// success. Noncooperative work must return before its resources can be stopped; this is not a hard wall-clock timeout.
     /// - Parameters:
     ///   - content: The server's file, video playlist, and headers
     ///   - audioStream: Audio stream to convert
@@ -119,6 +119,7 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
         player: AVPlayer,
         fallback: @escaping (CMTime) -> Void
     ) async throws(StartError) -> SpatialAudioModel {
+        let expires = ContinuousClock.now.advanced(by: .seconds(25))
         let starting = Task {
             try await Self.open(
                 content: content,
@@ -130,11 +131,18 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
             )
         }
         let deadline = Task {
-            try await Task.sleep(for: .seconds(25))
+            try await Task.sleep(until: expires, clock: .continuous)
             starting.cancel()
         }
         defer { deadline.cancel() }
-        do { return try await withTaskCancellationHandler { try await starting.value } onCancel: { starting.cancel() } }
+        do {
+            let model = try await withTaskCancellationHandler { try await starting.value } onCancel: { starting.cancel() }
+            guard !Task.isCancelled, !starting.isCancelled, ContinuousClock.now < expires else {
+                model.stop()
+                throw StartError.unavailable
+            }
+            return model
+        }
         catch {
             if Task.isCancelled { throw .unavailable } // The caller has moved on
             if starting.isCancelled {
@@ -158,9 +166,11 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
         player: AVPlayer,
         fallback: @escaping (CMTime) -> Void
     ) async throws -> SpatialAudioModel {
+        try Task.checkCancellation()
         try AtmosOutputActivator.configureAudioSession()
         var step = ContinuousClock.now
         let file = try await MatroskaFile.open(HTTPByteSource(url: content.file, headers: content.headers, session: Self.session))
+        try Task.checkCancellation()
         let opened = (ContinuousClock.now - step).formatted(.units(allowed: [.seconds], fractionalPart: .show(length: 1)))
         Log.info("Opened the file for SpatialAudioBridge in \(opened)") // Shows where a slow start waits
 
@@ -186,6 +196,10 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
             startTime: startTime,
             options: options
         )
+        guard !Task.isCancelled else {
+            await stream.stop()
+            throw CancellationError()
+        }
         guard let playlist = stream.masterPlaylistURL else { // Set whenever a video playlist was given
             await stream.stop()
             throw SpatialAudioError.source("The stream has no video")

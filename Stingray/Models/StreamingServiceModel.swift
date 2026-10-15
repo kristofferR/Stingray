@@ -743,8 +743,12 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
 
         let audioStream = mediaSource.audioStreams.first { $0.id == audioID }
         if #available(tvOS 26, *), allowsSpatialAudio, let audioStream, SpatialAudioModel.converts(audioStream),
-           let spatialAudioKey = SpatialAudioRefusalKey(serverID: self.serverID, serviceURL: self.serviceURL,
-                                                       source: mediaSource, audio: audioStream),
+           let spatialAudioKey = SpatialAudioRefusalKey(
+               serverID: self.serverID,
+               serviceURL: self.serviceURL,
+               source: mediaSource,
+               audio: audioStream
+           ),
            !self.spatialAudioFailures.contains(spatialAudioKey),
            let content = networkAPI.getSpatialAudioContent(
                accessToken: accessToken,

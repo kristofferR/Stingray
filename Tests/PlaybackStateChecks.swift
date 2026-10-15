@@ -78,6 +78,39 @@ protocol Switching {
                    subtitleID: StreamTransitionType, bitrate: Int?)
 }
 
+// A noncooperative open operation: cancellation is observed but completion stays under test control.
+final class StartupGate {
+    var model: SpatialAudioModel?
+    private var completion: CheckedContinuation<Void, Never>?
+    private var started: CheckedContinuation<Void, Never>?
+    private var cancellation: CheckedContinuation<Void, Never>?
+    private var wasCancelled = false
+    func suspend() async {
+        await withCheckedContinuation { continuation in
+            completion = continuation
+            started?.resume()
+            started = nil
+        }
+    }
+    func waitUntilStarted() async {
+        if completion != nil { return }
+        await withCheckedContinuation { started = $0 }
+    }
+    func didCancel() {
+        wasCancelled = true
+        cancellation?.resume()
+        cancellation = nil
+    }
+    func waitUntilCancelled() async {
+        if wasCancelled { return }
+        await withCheckedContinuation { cancellation = $0 }
+    }
+    func complete() {
+        completion?.resume()
+        completion = nil
+    }
+}
+
 @main struct PlaybackStateChecks {
     static var checks = 0
     static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -92,6 +125,7 @@ protocol Switching {
         try positions()
         try keys()
         try await failures()
+        try await cancellations()
         print("PASS \(checks) focused playback-state checks; no media or device operations")
     }
     static func positions() throws {
@@ -186,5 +220,61 @@ protocol Switching {
         check(success.spatialAudioFailures.isEmpty && success.fallbackTimes.isEmpty, "Success must not record a refusal")
         check(success.spatialAudio?.played == true, "Success must publish the ready spatial player")
         print("PASS actual startup classification/cache insertion with injected errors; no decoder or network activity")
+    }
+
+    static func cancellations() async throws {
+        let s = try source()
+        let audio = s.audioStreams[0] as! MediaStream
+        let key = SpatialAudioRefusalKey(serverID: "server", serviceURL: URL(string: "https://server.example")!, source: s, audio: audio)!
+        // The real 25-second deadline cancels open; open deliberately ignores it until released.
+        let deadline = StartupGate()
+        SpatialAudioModel.nextGate = deadline
+        let host = FailureHost()
+        host.begin(source: s, audio: audio, key: key)
+        let pending = host.spatialAudioStart!
+        await deadline.waitUntilStarted()
+        await deadline.waitUntilCancelled()
+        check(host.spatialAudio == nil && host.fallbackTimes.isEmpty, "Cancellation cannot forcibly finish noncooperative work")
+        deadline.complete()
+        await pending.value
+        check(deadline.model?.stopped == true && deadline.model?.played == false, "Late deadline success must be stopped, not played")
+        check(host.fallbackTimes.count == 1 && host.fallbackTimes[0].seconds == 930, "Deadline refusal must fall back at the pending position")
+        check(host.spatialAudioFailures.isEmpty, "A deadline must remain retryable")
+
+        for replaced in [false, true] {
+            let old = StartupGate()
+            SpatialAudioModel.nextGate = old
+            let owner = FailureHost()
+            owner.begin(source: s, audio: audio, key: key)
+            let oldTask = owner.spatialAudioStart!
+            await old.waitUntilStarted()
+            owner.playbackEnd()
+            await old.waitUntilCancelled()
+            SpatialAudioModel.nextGate = nil
+            if replaced { await owner.attempt(source: s, audio: audio, key: key) }
+            let current = owner.spatialAudio
+            old.complete()
+            await oldTask.value
+            check(old.model?.stopped == true && old.model?.played == false, "Stopped/replaced startup must reject late success")
+            check(owner.spatialAudio === current, "Old startup must not replace its successor")
+            check(owner.fallbackTimes.isEmpty && owner.spatialAudioFailures.isEmpty, "Old startup must not fall back or cache a refusal")
+            check(replaced ? current?.played == true && current?.stopped == false : current == nil, "Current session ownership changed")
+        }
+
+        let cancelledError = StartupGate()
+        SpatialAudioModel.nextGate = cancelledError
+        SpatialAudioModel.nextError = SpatialAudioError.decoding("late refusal")
+        let cancelled = FailureHost()
+        cancelled.begin(source: s, audio: audio, key: key)
+        let cancelledTask = cancelled.spatialAudioStart!
+        await cancelledError.waitUntilStarted()
+        cancelled.playbackEnd()
+        await cancelledError.waitUntilCancelled()
+        cancelledError.complete()
+        await cancelledTask.value
+        check(cancelled.spatialAudioFailures.isEmpty && cancelled.fallbackTimes.isEmpty, "Cancelled decoding errors must not affect a later session")
+        SpatialAudioModel.nextError = nil
+        SpatialAudioModel.nextGate = nil
+        print("PASS real 25-second deadline, noncooperative late success, stop/replacement ownership and cancelled decoding refusal")
     }
 }

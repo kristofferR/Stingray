@@ -37,26 +37,42 @@ end
 parts << "public final class SpatialAudioModel {\n" + block(spatial, 'public enum StartError:') + "\n" +
   block(spatial, 'public static func start(') + "\n" + <<~SWIFT
   static var nextError: (any Error)?
+  static var nextGate: StartupGate?
   var played = false
+  var stopped = false
   static func open(content: SpatialAudioContent, audioStream: any MediaStreamProtocol,
                    mediaSource: any MediaSourceProtocol, startTime: CMTime, player: AVPlayer,
                    fallback: @escaping (CMTime) -> Void) async throws -> SpatialAudioModel {
-      if let error = nextError { throw error }
-      return SpatialAudioModel()
+      let error = nextError
+      let gate = nextGate
+      if let gate {
+          await withTaskCancellationHandler { await gate.suspend() } onCancel: {
+              Task { @MainActor in gate.didCancel() }
+          }
+      }
+      if let error { throw error }
+      let model = SpatialAudioModel()
+      gate?.model = model
+      return model
   }
   func play(title: String, subtitle: String?) { played = true }
-  func stop() {}
+  func stop() { stopped = true }
   }
 SWIFT
-parts << "final class FailureHost {\n" + block(service, 'private func startSpatialAudio(') + "\n" + <<~SWIFT
+parts << "final class FailureHost {\n" + block(service, 'private func startSpatialAudio(') + "\n" +
+  block(service, 'public func playbackEnd()') + "\n" + <<~SWIFT
+  var playerProgress: Progress?
   var spatialAudioStart: Task<Void, Never>?
   var spatialAudio: SpatialAudioModel?
   var spatialAudioFailures: Set<SpatialAudioRefusalKey> = []
   var fallbackTimes: [CMTime] = []
-  func attempt(source: MediaSource, audio: MediaStream, key: SpatialAudioRefusalKey) async {
+  func begin(source: MediaSource, audio: MediaStream, key: SpatialAudioRefusalKey) {
       startSpatialAudio(content: SpatialAudioContent(), audioStream: audio, mediaSource: source,
                         title: "test", subtitle: nil, startTime: CMTime(seconds: 930, preferredTimescale: 600),
                         player: AVPlayer(), fallback: { self.fallbackTimes.append($0) }, failureKey: key)
+  }
+  func attempt(source: MediaSource, audio: MediaStream, key: SpatialAudioRefusalKey) async {
+      begin(source: source, audio: audio, key: key)
       await spatialAudioStart?.value
   }
   }
@@ -70,4 +86,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
   "$project_dir/Stingray/Views/Player/Components/StreamTransitionType.swift" \
   "$probe_dir/Production.swift" "$project_dir/Tests/PlaybackStateChecks.swift" \
   -o "$probe_dir/PlaybackStateChecks"
-"$probe_dir/PlaybackStateChecks"
+python3 - "$probe_dir/PlaybackStateChecks" <<'PY'
+import subprocess, sys
+subprocess.run([sys.argv[1]], check=True, timeout=90)
+PY
