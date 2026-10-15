@@ -183,7 +183,7 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
     @ObservationIgnored private var spatialAudio: SpatialAudioProtocol?
     /// Starts `spatialAudio`
     @ObservationIgnored private var spatialAudioStart: Task<Void, Never>?
-    /// Playback configurations SpatialAudioBridge refused, which play the usual audio from then on
+    /// Audio tracks SpatialAudioBridge refused, which play the usual audio from then on
     @ObservationIgnored private var spatialAudioFailures: Set<String> = []
 
     /// Create a `JellyfinModel` based on known data.
@@ -742,7 +742,7 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
         let bitrateBits = bitrate ?? videoStream.bitrate
 
         let audioStream = mediaSource.audioStreams.first { $0.id == audioID }
-        let spatialAudioKey = [mediaSource.id, videoID, audioID, subtitleID ?? "", String(bitrateBits)].joined(separator: "/")
+        let spatialAudioKey = [mediaSource.id, audioID].joined(separator: "/")
         if #available(tvOS 26, *), allowsSpatialAudio, let audioStream, SpatialAudioModel.converts(audioStream),
            !self.spatialAudioFailures.contains(spatialAudioKey),
            let content = networkAPI.getSpatialAudioContent(
@@ -839,7 +839,7 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
     ///   - startTime: Where playback starts
     ///   - player: Player to play through
     ///   - fallback: Plays the usual audio from the given time
-    ///   - failureKey: Playback configuration to remember if SpatialAudioBridge refuses the track
+    ///   - failureKey: Audio track to remember if SpatialAudioBridge refuses it
     @available(tvOS 26, *)
     private func startSpatialAudio(
         content: SpatialAudioContent,

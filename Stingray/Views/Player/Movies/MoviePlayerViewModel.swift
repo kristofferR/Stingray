@@ -116,6 +116,9 @@ public final class MoviePlayerViewModel: AVPlayerViewModelProtocol, Hashable {
 
         self.stopPlayer()
 
+        // Stopping saves the pending spatial start position when the player has no item yet.
+        let startTime = startTime.isNumeric ? startTime : CMTime(seconds: self.mediaSource.startPoint, preferredTimescale: 600)
+
         // Create/update the player
         self.streamingService.playbackStart(
             mediaSource: self.mediaSource,
