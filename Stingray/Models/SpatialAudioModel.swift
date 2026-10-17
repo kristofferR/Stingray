@@ -207,6 +207,22 @@ public final class SpatialAudioModel: SpatialAudioProtocol {
         self.atmos.attach(to: self.player) // The playlist offers only APAC audio, so every item plays it
         self.player.replaceCurrentItem(with: item)
         self.player.seek(to: self.startTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        // DIAG (TV run only): activator and route state after the switch
+        Task { [weak self] in
+            for delay in [1, 3, 6, 12, 20] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard let self, !self.isStopped else { return }
+                let session = AVAudioSession.sharedInstance()
+                let format = session.responds(to: NSSelectorFromString("audioFormat")) ? "\(session.value(forKey: "audioFormat") ?? "nil")" : "n/a"
+                let group = try? await self.item?.asset.loadMediaSelectionGroup(for: .audible)
+                let selected = group.flatMap { self.item?.currentMediaSelection.selectedMediaOption(in: $0) }
+                Log.info("SABDIAG +\(delay)s atmos.isActive=\(self.atmos.isActive) atmos.error=\(String(describing: self.atmos.error)) "
+                    + "host.tcs=\(self.player.timeControlStatus.rawValue) rate=\(self.player.rate) item.status=\(self.item?.status.rawValue ?? -1) "
+                    + "itemIsCurrent=\(self.player.currentItem === self.item) t=\(self.player.currentTime().seconds) "
+                    + "options=\(group?.options.map(\.displayName) ?? []) selected=\(selected?.displayName ?? "nil") "
+                    + "channels=\(session.outputNumberOfChannels) audioFormat=\(format) route=\(session.currentRoute.outputs.map(\.portType.rawValue))")
+            }
+        }
     }
 
     // AI Generated

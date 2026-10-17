@@ -735,6 +735,13 @@ public final class JellyfinModel: SystemInfoProviding, LibraryProviding, PlayerP
             return
         }
         let bitrateBits = bitrate ?? videoStream.bitrate
+        // DIAG (TV run only)
+        if #available(tvOS 26, *), let diagStream = mediaSource.audioStreams.first(where: { $0.id == audioID }) {
+            Log.info("SABDIAG playbackStart audio=\(audioID) codec=\(diagStream.codec) profile=\(diagStream.profile) "
+                + "external=\(diagStream.isExternal) spatialCodec=\(String(describing: SpatialAudioModel.codec(of: diagStream))) "
+                + "allows=\(allowsSpatialAudio) refused=\(self.spatialAudioRefusals.contains("\(mediaSource.id)/\(audioID)")) "
+                + "start=\(startTime.seconds) rate=\(player.rate) item=\(player.currentItem != nil)")
+        }
 
         if #available(tvOS 26, *), allowsSpatialAudio,
            let audioStream = mediaSource.audioStreams.first(where: { $0.id == audioID }),
