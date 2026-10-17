@@ -1,0 +1,69 @@
+name: SpatialAudioBridge 2.0 validation (fork only)
+
+# Fork-local. Lives only on ci/stingray-sab-2.0, which is the candidate
+# branch plus this file. Never publishes: no secrets, unsigned builds only.
+
+on:
+  push:
+    branches: [ci/stingray-sab-2.0-diag]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sab-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tvos:
+    name: Build tvOS app
+    if: github.repository == 'kristofferR/Stingray'
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      LOCKFILE: Stingray.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Only this workflow differs from the candidate
+        run: |
+          git diff --exit-code HEAD~1 HEAD -- . ':(exclude).github/workflows/sab-validation.yml'
+          mkdir -p out
+          echo "candidate=$(git rev-parse HEAD~1)" | tee out/candidate.txt
+          xcodebuild -version | tee -a out/candidate.txt
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies -project Stingray.xcodeproj -scheme Stingray \
+            -clonedSourcePackagesDirPath build/spm -skipPackagePluginValidation 2>&1 | tail -20
+          cp "$LOCKFILE" out/Package.resolved
+          git diff -- "$LOCKFILE" | tee out/Package.resolved.diff
+      - name: Build for tvOS device (Release, unsigned)
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild build -project Stingray.xcodeproj -scheme Stingray \
+            -sdk appletvos -configuration Release -destination 'generic/platform=tvOS' \
+            -clonedSourcePackagesDirPath build/spm -derivedDataPath build/dd \
+            -skipPackagePluginValidation ARCHS=arm64 \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee out/build.log | grep -E 'error:|warning:|BUILD' || true
+          grep -q 'BUILD SUCCEEDED' out/build.log
+      - name: Warnings in changed files
+        if: always()
+        run: |
+          grep -E 'warning:' out/build.log | grep -E 'SpatialAudio|StreamingServiceModel|APINetwork|AVPlayerItemExtension|MediaProtocols|MediaModelComponents|PlayerViewModel' | sort -u | tee out/changed-warnings.txt || true
+      - name: Package unsigned app
+        run: |
+          APP=build/dd/Build/Products/Release-appletvos/Stingray.app
+          test -d "$APP"
+          ls "$APP/Frameworks" "$APP/PlugIns" || true
+          ditto -c -k --keepParent "$APP" out/Stingray-unsigned-Release-appletvos.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: stingray-sab-2.0-${{ github.run_id }}
+          path: out/
+          retention-days: 14
